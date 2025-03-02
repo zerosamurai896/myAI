@@ -1,0 +1,826 @@
+// Idle Space Mining Game - Core Game Architecture
+
+// Main game imports and interfaces
+import { EventEmitter } from 'events';
+
+// Game Constants
+const GAME_VERSION = '1.0.0';
+const RESOURCE_TYPES = ['iron', 'copper', 'titanium', 'uranium', 'palladium', 'exonium', 'darkMatter', 'stellarEssence'];
+const SHIP_TYPES = ['scout', 'miner', 'hauler', 'explorer', 'flagship', 'alienHunter'];
+const PLANET_TYPES = ['rocky', 'gaseous', 'ice', 'volcanic', 'alien', 'neutron', 'blackHole'];
+const ARTIFACT_RARITIES = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic', 'transcendent'];
+
+// Core game interfaces
+interface Resource {
+  id: string;
+  name: string;
+  description: string;
+  value: number;
+  tier: number;
+  color: string;
+  icon: string;
+}
+
+interface Ship {
+  id: string;
+  name: string;
+  type: string;
+  level: number;
+  capacity: number;
+  miningSpeed: number;
+  fuel: number;
+  maxFuel: number;
+  durability: number;
+  maxDurability: number;
+  upgrades: ShipUpgrade[];
+  artifacts: Artifact[];
+  crew: CrewMember[];
+  currentPlanet: string | null;
+  miningStatus: 'idle' | 'mining' | 'traveling' | 'repairing';
+  resourcesHeld: { [key: string]: number };
+}
+
+interface ShipUpgrade {
+  id: string;
+  name: string;
+  description: string;
+  level: number;
+  maxLevel: number;
+  bonusType: 'miningSpeed' | 'capacity' | 'fuelEfficiency' | 'durability' | 'artifactChance';
+  bonusValue: number;
+  costs: { [resource: string]: number };
+}
+
+interface CrewMember {
+  id: string;
+  name: string;
+  specialty: 'mining' | 'navigation' | 'engineering' | 'research';
+  level: number;
+  experience: number;
+  bonuses: { [key: string]: number };
+}
+
+interface Planet {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  distanceFromHome: number;
+  resources: { [resource: string]: { abundance: number, difficulty: number } };
+  artifactChance: number;
+  discovered: boolean;
+  depleted: number; // 0-100% depletion
+  color: string;
+  rings?: boolean;
+  visualEffects?: string[];
+  requiredLevel?: number;
+}
+
+interface SolarSystem {
+  id: string;
+  name: string;
+  planets: Planet[];
+  discovered: boolean;
+  distanceFromHome: number;
+  background: string;
+  requiredLevel: number;
+}
+
+interface Artifact {
+  id: string;
+  name: string;
+  description: string;
+  rarity: string;
+  bonusType: string;
+  bonusValue: number;
+  equipped: boolean;
+  icon: string;
+}
+
+interface Research {
+  id: string;
+  name: string;
+  description: string;
+  level: number;
+  maxLevel: number;
+  bonusType: string;
+  bonusValue: number;
+  costs: { [resource: string]: number };
+  requiredResearch: string[];
+  completed: boolean;
+}
+
+interface GameState {
+  version: string;
+  playerName: string;
+  credits: number;
+  premiumCurrency: number;
+  ships: Ship[];
+  inventory: { [resource: string]: number };
+  artifacts: Artifact[];
+  research: Research[];
+  discoveredSolarSystems: string[];
+  discoveredPlanets: string[];
+  stats: GameStats;
+  lastSaveTime: number;
+  settings: GameSettings;
+  achievements: Achievement[];
+  unlocks: string[];
+  activeBoosters: Booster[];
+}
+
+interface GameStats {
+  totalResourcesMined: { [resource: string]: number };
+  totalShipsBuilt: number;
+  totalPlanetsDiscovered: number;
+  totalArtifactsFound: number;
+  totalCreditsEarned: number;
+  totalTimePlayed: number;
+  deepestExploration: number;
+}
+
+interface Achievement {
+  id: string;
+  name: string;
+  description: string;
+  criteria: string;
+  progress: number;
+  target: number;
+  completed: boolean;
+  reward: any;
+}
+
+interface Booster {
+  id: string;
+  name: string;
+  description: string;
+  bonusType: string;
+  bonusValue: number;
+  duration: number;
+  startTime: number;
+}
+
+interface GameSettings {
+  soundEffectsVolume: number;
+  musicVolume: number;
+  particleEffects: boolean;
+  autoSell: boolean;
+  notifications: boolean;
+  offlineProgression: boolean;
+}
+
+// Main Game Class
+class IdleSpaceMiningGame {
+  private state: GameState;
+  private resources: Resource[];
+  private shipTypes: any;
+  private solarSystems: SolarSystem[];
+  private upgradeTree: any;
+  private researchTree: Research[];
+  private events: EventEmitter;
+  private lastTickTime: number;
+  private tickInterval: number;
+  private isRunning: boolean;
+  private uiManager: UIManager;
+  private saveManager: SaveManager;
+  private monetizationManager: MonetizationManager;
+  private audioManager: AudioManager;
+  private particleManager: ParticleManager;
+
+  constructor() {
+    this.events = new EventEmitter();
+    this.isRunning = false;
+    this.tickInterval = 1000; // Main game loop runs every second
+    this.lastTickTime = Date.now();
+    
+    // Initialize managers
+    this.saveManager = new SaveManager(this);
+    this.uiManager = new UIManager(this);
+    this.monetizationManager = new MonetizationManager(this);
+    this.audioManager = new AudioManager();
+    this.particleManager = new ParticleManager();
+
+    // Load game state
+    const savedState = this.saveManager.loadGame();
+    if (savedState) {
+      this.state = savedState;
+      this.calculateOfflineProgress();
+    } else {
+      this.state = this.createNewGameState();
+    }
+
+    // Initialize game data
+    this.resources = this.initializeResources();
+    this.shipTypes = this.initializeShipTypes();
+    this.solarSystems = this.initializeSolarSystems();
+    this.upgradeTree = this.initializeUpgradeTree();
+    this.researchTree = this.initializeResearchTree();
+
+    // Setup event listeners
+    this.setupEventListeners();
+  }
+
+  // Game initialization methods
+  private createNewGameState(): GameState {
+    return {
+      version: GAME_VERSION,
+      playerName: 'Commander',
+      credits: 500,
+      premiumCurrency: 0,
+      ships: [this.createStarterShip()],
+      inventory: { 'iron': 0, 'copper': 0 },
+      artifacts: [],
+      research: [],
+      discoveredSolarSystems: ['sol'],
+      discoveredPlanets: ['earth', 'moon', 'mars'],
+      stats: {
+        totalResourcesMined: {},
+        totalShipsBuilt: 1,
+        totalPlanetsDiscovered: 3,
+        totalArtifactsFound: 0,
+        totalCreditsEarned: 0,
+        totalTimePlayed: 0,
+        deepestExploration: 0
+      },
+      lastSaveTime: Date.now(),
+      settings: {
+        soundEffectsVolume: 0.7,
+        musicVolume: 0.5,
+        particleEffects: true,
+        autoSell: false,
+        notifications: true,
+        offlineProgression: true
+      },
+      achievements: [],
+      unlocks: ['scout', 'miner'],
+      activeBoosters: []
+    };
+  }
+
+  private createStarterShip(): Ship {
+    return {
+      id: 'ship_1',
+      name: 'Mining Scout I',
+      type: 'scout',
+      level: 1,
+      capacity: 100,
+      miningSpeed: 1,
+      fuel: 100,
+      maxFuel: 100,
+      durability: 100,
+      maxDurability: 100,
+      upgrades: [],
+      artifacts: [],
+      crew: [],
+      currentPlanet: 'earth',
+      miningStatus: 'idle',
+      resourcesHeld: {}
+    };
+  }
+
+  private initializeResources(): Resource[] {
+    return [
+      {
+        id: 'iron',
+        name: 'Iron',
+        description: 'Common metal used in basic ship components',
+        value: 1,
+        tier: 1,
+        color: '#A19D94',
+        icon: 'iron_icon'
+      },
+      {
+        id: 'copper',
+        name: 'Copper',
+        description: 'Conductive metal used in electronics',
+        value: 2,
+        tier: 1,
+        color: '#B87333',
+        icon: 'copper_icon'
+      },
+      {
+        id: 'titanium',
+        name: 'Titanium',
+        description: 'Strong, lightweight metal for advanced ships',
+        value: 5,
+        tier: 2,
+        color: '#878681',
+        icon: 'titanium_icon'
+      },
+      {
+        id: 'uranium',
+        name: 'Uranium',
+        description: 'Radioactive material for nuclear engines',
+        value: 10,
+        tier: 2,
+        color: '#2ECC71',
+        icon: 'uranium_icon'
+      },
+      {
+        id: 'palladium',
+        name: 'Palladium',
+        description: 'Rare metal used in fuel cells',
+        value: 20,
+        tier: 3,
+        color: '#BDC3C7',
+        icon: 'palladium_icon'
+      },
+      {
+        id: 'exonium',
+        name: 'Exonium',
+        description: 'Exotic material only found in distant systems',
+        value: 50,
+        tier: 4,
+        color: '#9B59B6',
+        icon: 'exonium_icon'
+      },
+      {
+        id: 'darkMatter',
+        name: 'Dark Matter',
+        description: 'Mysterious substance from black hole proximity',
+        value: 100,
+        tier: 5,
+        color: '#34495E',
+        icon: 'dark_matter_icon'
+      },
+      {
+        id: 'stellarEssence',
+        name: 'Stellar Essence',
+        description: 'Pure energy crystallized from dying stars',
+        value: 200,
+        tier: 6,
+        color: '#F1C40F',
+        icon: 'stellar_essence_icon'
+      }
+    ];
+  }
+
+  private initializeShipTypes(): any {
+    return {
+      scout: {
+        name: 'Scout',
+        baseStats: {
+          capacity: 100,
+          miningSpeed: 1.2,
+          maxFuel: 120,
+          maxDurability: 80
+        },
+        description: 'Fast and efficient for exploration, but limited capacity',
+        unlockCost: { credits: 0 },
+        buildCost: { credits: 500, iron: 50 }
+      },
+      miner: {
+        name: 'Miner',
+        baseStats: {
+          capacity: 200,
+          miningSpeed: 1.5,
+          maxFuel: 100,
+          maxDurability: 100
+        },
+        description: 'Specialized for efficient resource extraction',
+        unlockCost: { credits: 0 },
+        buildCost: { credits: 1000, iron: 100, copper: 50 }
+      },
+      hauler: {
+        name: 'Hauler',
+        baseStats: {
+          capacity: 500,
+          miningSpeed: 0.8,
+          maxFuel: 150,
+          maxDurability: 150
+        },
+        description: 'Massive cargo capacity but slower mining',
+        unlockCost: { credits: 5000 },
+        buildCost: { credits: 5000, iron: 250, copper: 100, titanium: 50 }
+      },
+      explorer: {
+        name: 'Explorer',
+        baseStats: {
+          capacity: 150,
+          miningSpeed: 1.0,
+          maxFuel: 200,
+          maxDurability: 120
+        },
+        description: 'Advanced scanning systems for discovering rare resources',
+        unlockCost: { credits: 10000 },
+        buildCost: { credits: 8000, titanium: 100, uranium: 30 }
+      },
+      flagship: {
+        name: 'Flagship',
+        baseStats: {
+          capacity: 300,
+          miningSpeed: 2.0,
+          maxFuel: 250,
+          maxDurability: 200
+        },
+        description: 'Elite multi-purpose vessel with excellent all-around stats',
+        unlockCost: { credits: 25000 },
+        buildCost: { credits: 20000, titanium: 200, uranium: 50, palladium: 25 }
+      },
+      alienHunter: {
+        name: 'Alien Hunter',
+        baseStats: {
+          capacity: 200,
+          miningSpeed: 1.5,
+          maxFuel: 200,
+          maxDurability: 180
+        },
+        description: 'Specialized in locating alien artifacts with advanced technology',
+        unlockCost: { premiumCurrency: 100 },
+        buildCost: { credits: 15000, exonium: 20, darkMatter: 5 }
+      }
+    };
+  }
+
+  private initializeSolarSystems(): SolarSystem[] {
+    return [
+      {
+        id: 'sol',
+        name: 'Sol System',
+        planets: [
+          {
+            id: 'earth',
+            name: 'Earth',
+            type: 'rocky',
+            size: 1,
+            distanceFromHome: 0,
+            resources: {
+              'iron': { abundance: 0.8, difficulty: 1 },
+              'copper': { abundance: 0.5, difficulty: 1 }
+            },
+            artifactChance: 0.01,
+            discovered: true,
+            depleted: 0,
+            color: '#1E88E5',
+            requiredLevel: 1
+          },
+          {
+            id: 'moon',
+            name: 'Moon',
+            type: 'rocky',
+            size: 0.3,
+            distanceFromHome: 0.1,
+            resources: {
+              'iron': { abundance: 0.6, difficulty: 1.2 },
+              'titanium': { abundance: 0.2, difficulty: 1.5 }
+            },
+            artifactChance: 0.02,
+            discovered: true,
+            depleted: 0,
+            color: '#9E9E9E',
+            requiredLevel: 1
+          },
+          {
+            id: 'mars',
+            name: 'Mars',
+            type: 'rocky',
+            size: 0.5,
+            distanceFromHome: 0.5,
+            resources: {
+              'iron': { abundance: 0.7, difficulty: 1.5 },
+              'copper': { abundance: 0.4, difficulty: 1.5 },
+              'uranium': { abundance: 0.2, difficulty: 2 }
+            },
+            artifactChance: 0.03,
+            discovered: true,
+            depleted: 0,
+            color: '#E65100',
+            requiredLevel: 2
+          }
+        ],
+        discovered: true,
+        distanceFromHome: 0,
+        background: 'sol_background',
+        requiredLevel: 1
+      },
+      {
+        id: 'alpha_centauri',
+        name: 'Alpha Centauri',
+        planets: [
+          {
+            id: 'proxima_b',
+            name: 'Proxima b',
+            type: 'rocky',
+            size: 1.1,
+            distanceFromHome: 4.2,
+            resources: {
+              'iron': { abundance: 0.6, difficulty: 2 },
+              'copper': { abundance: 0.6, difficulty: 2 },
+              'titanium': { abundance: 0.4, difficulty: 2 },
+              'palladium': { abundance: 0.2, difficulty: 2.5 }
+            },
+            artifactChance: 0.05,
+            discovered: false,
+            depleted: 0,
+            color: '#C62828',
+            requiredLevel: 5
+          },
+          {
+            id: 'alpha_cent_gas_giant',
+            name: 'Gargantua',
+            type: 'gaseous',
+            size: 11,
+            distanceFromHome: 4.3,
+            resources: {
+              'uranium': { abundance: 0.5, difficulty: 3 },
+              'palladium': { abundance: 0.3, difficulty: 3 }
+            },
+            artifactChance: 0.08,
+            discovered: false,
+            depleted: 0,
+            color: '#FFA000',
+            rings: true,
+            requiredLevel: 7
+          }
+        ],
+        discovered: false,
+        distanceFromHome: 4.2,
+        background: 'alpha_centauri_background',
+        requiredLevel: 5
+      },
+      {
+        id: 'barnards_star',
+        name: 'Barnard\'s Star',
+        planets: [
+          {
+            id: 'barnards_planet',
+            name: 'Frost',
+            type: 'ice',
+            size: 0.8,
+            distanceFromHome: 6,
+            resources: {
+              'titanium': { abundance: 0.7, difficulty: 2.5 },
+              'uranium': { abundance: 0.5, difficulty: 2.5 },
+              'palladium': { abundance: 0.4, difficulty: 3 }
+            },
+            artifactChance: 0.1,
+            discovered: false,
+            depleted: 0,
+            color: '#81D4FA',
+            requiredLevel: 10
+          }
+        ],
+        discovered: false,
+        distanceFromHome: 6,
+        background: 'barnards_star_background',
+        requiredLevel: 8
+      },
+      {
+        id: 'sirius',
+        name: 'Sirius System',
+        planets: [
+          {
+            id: 'sirius_b_debris',
+            name: 'White Dwarf Debris Field',
+            type: 'alien',
+            size: 2,
+            distanceFromHome: 8.6,
+            resources: {
+              'exonium': { abundance: 0.3, difficulty: 4 },
+              'palladium': { abundance: 0.6, difficulty: 3.5 }
+            },
+            artifactChance: 0.15,
+            discovered: false,
+            depleted: 0,
+            color: '#F5F5F5',
+            visualEffects: ['glow', 'particles'],
+            requiredLevel: 15
+          }
+        ],
+        discovered: false,
+        distanceFromHome: 8.6,
+        background: 'sirius_background',
+        requiredLevel: 12
+      },
+      {
+        id: 'betelgeuse',
+        name: 'Betelgeuse System',
+        planets: [
+          {
+            id: 'betelgeuse_prime',
+            name: 'Forge',
+            type: 'volcanic',
+            size: 1.5,
+            distanceFromHome: 642.5,
+            resources: {
+              'exonium': { abundance: 0.5, difficulty: 5 },
+              'darkMatter': { abundance: 0.2, difficulty: 6 }
+            },
+            artifactChance: 0.2,
+            discovered: false,
+            depleted: 0,
+            color: '#FF5722',
+            visualEffects: ['lava', 'smoke'],
+            requiredLevel: 25
+          }
+        ],
+        discovered: false,
+        distanceFromHome: 642.5,
+        background: 'betelgeuse_background',
+        requiredLevel: 20
+      },
+      {
+        id: 'void_sector',
+        name: 'Void Sector',
+        planets: [
+          {
+            id: 'neutron_star',
+            name: 'Pulsar PSR-X1',
+            type: 'neutron',
+            size: 0.2,
+            distanceFromHome: 1000,
+            resources: {
+              'darkMatter': { abundance: 0.6, difficulty: 7 },
+              'stellarEssence': { abundance: 0.3, difficulty: 8 }
+            },
+            artifactChance: 0.25,
+            discovered: false,
+            depleted: 0,
+            color: '#1A237E',
+            visualEffects: ['pulsar_beam', 'radiation'],
+            requiredLevel: 35
+          },
+          {
+            id: 'event_horizon',
+            name: 'Event Horizon',
+            type: 'blackHole',
+            size: 0.5,
+            distanceFromHome: 1001,
+            resources: {
+              'darkMatter': { abundance: 0.8, difficulty: 9 },
+              'stellarEssence': { abundance: 0.5, difficulty: 10 }
+            },
+            artifactChance: 0.5,
+            discovered: false,
+            depleted: 0,
+            color: '#000000',
+            visualEffects: ['accretion_disk', 'gravity_lensing', 'time_dilation'],
+            requiredLevel: 40
+          }
+        ],
+        discovered: false,
+        distanceFromHome: 1000,
+        background: 'void_background',
+        requiredLevel: 30
+      }
+    ];
+  }
+
+  private initializeUpgradeTree(): any {
+    // Ship upgrade trees
+    return {
+      miningDrill: {
+        name: 'Mining Drill',
+        levels: [
+          { level: 1, cost: { credits: 1000, iron: 100 }, bonusValue: 0.2, description: '+20% mining speed' },
+          { level: 2, cost: { credits: 2500, iron: 200, copper: 100 }, bonusValue: 0.25, description: '+25% mining speed' },
+          { level: 3, cost: { credits: 5000, iron: 300, copper: 150, titanium: 50 }, bonusValue: 0.3, description: '+30% mining speed' },
+          { level: 4, cost: { credits: 10000, titanium: 100, uranium: 30 }, bonusValue: 0.4, description: '+40% mining speed' },
+          { level: 5, cost: { credits: 25000, titanium: 200, uranium: 50, palladium: 20 }, bonusValue: 0.5, description: '+50% mining speed' }
+        ],
+        maxLevel: 5,
+        bonusType: 'miningSpeed'
+      },
+      cargoHold: {
+        name: 'Cargo Hold',
+        levels: [
+          { level: 1, cost: { credits: 1000, iron: 150 }, bonusValue: 0.25, description: '+25% cargo capacity' },
+          { level: 2, cost: { credits: 2500, iron: 300, copper: 150 }, bonusValue: 0.25, description: '+25% cargo capacity' },
+          { level: 3, cost: { credits: 5000, iron: 500, copper: 250, titanium: 75 }, bonusValue: 0.25, description: '+25% cargo capacity' },
+          { level: 4, cost: { credits: 10000, titanium: 150, uranium: 40 }, bonusValue: 0.5, description: '+50% cargo capacity' },
+          { level: 5, cost: { credits: 25000, titanium: 300, uranium: 75, palladium: 30 }, bonusValue: 0.75, description: '+75% cargo capacity' }
+        ],
+        maxLevel: 5,
+        bonusType: 'capacity'
+      },
+      fuelTank: {
+        name: 'Fuel Tank',
+        levels: [
+          { level: 1, cost: { credits: 1000, iron: 100, copper: 50 }, bonusValue: 0.2, description: '+20% fuel capacity' },
+          { level: 2, cost: { credits: 2000, iron: 200, copper: 100 }, bonusValue: 0.2, description: '+20% fuel capacity' },
+          { level: 3, cost: { credits: 4000, titanium: 50, uranium: 20 }, bonusValue: 0.3, description: '+30% fuel capacity' },
+          { level: 4, cost: { credits: 8000, titanium: 100, uranium: 40 }, bonusValue: 0.3, description: '+30% fuel capacity' },
+          { level: 5, cost: { credits: 16000, titanium: 200, uranium: 80, palladium: 25 }, bonusValue: 0.5, description: '+50% fuel capacity' }
+        ],
+        maxLevel: 5,
+        bonusType: 'maxFuel'
+      },
+      hullReinforcement: {
+        name: 'Hull Reinforcement',
+        levels: [
+          { level: 1, cost: { credits: 1000, iron: 150, copper: 75 }, bonusValue: 0.25, description: '+25% durability' },
+          { level: 2, cost: { credits: 2500, iron: 250, copper: 125, titanium: 25 }, bonusValue: 0.25, description: '+25% durability' },
+          { level: 3, cost: { credits: 5000, titanium: 75, uranium: 25 }, bonusValue: 0.25, description: '+25% durability' },
+          { level: 4, cost: { credits: 10000, titanium: 150, uranium: 50, palladium: 15 }, bonusValue: 0.25, description: '+25% durability' },
+          { level: 5, cost: { credits: 20000, palladium: 50, exonium: 10 }, bonusValue: 0.5, description: '+50% durability' }
+        ],
+        maxLevel: 5,
+        bonusType: 'durability'
+      },
+      scanningArray: {
+        name: 'Scanning Array',
+        levels: [
+          { level: 1, cost: { credits: 2000, copper: 150, titanium: 50 }, bonusValue: 0.05, description: '+5% artifact find chance' },
+          { level: 2, cost: { credits: 5000, titanium: 100, uranium: 30 }, bonusValue: 0.05, description: '+5% artifact find chance' },
+          { level: 3, cost: { credits: 10000, titanium: 200, uranium: 60, palladium: 20 }, bonusValue: 0.05, description: '+5% artifact find chance' },
+          { level: 4, cost: { credits: 25000, palladium: 50, exonium: 15 }, bonusValue: 0.1, description: '+10% artifact find chance' },
+          { level: 5, cost: { credits: 50000, exonium: 30, darkMatter: 5 }, bonusValue: 0.15, description: '+15% artifact find chance' }
+        ],
+        maxLevel: 5,
+        bonusType: 'artifactChance'
+      }
+    };
+  }
+
+  private initializeResearchTree(): Research[] {
+    return [
+      {
+        id: 'advanced_mining',
+        name: 'Advanced Mining Techniques',
+        description: 'Improves mining efficiency for all ships',
+        level: 0,
+        maxLevel: 5,
+        bonusType: 'globalMiningSpeed',
+        bonusValue: 0.1,
+        costs: { credits: 5000, iron: 500, copper: 250 },
+        requiredResearch: [],
+        completed: false
+      },
+      {
+        id: 'efficient_engines',
+        name: 'Efficient Engines',
+        description: 'Reduces fuel consumption during travel',
+        level: 0,
+        maxLevel: 5,
+        bonusType: 'fuelEfficiency',
+        bonusValue: 0.1,
+        costs: { credits: 5000, iron: 300, copper: 400, titanium: 100 },
+        requiredResearch: [],
+        completed: false
+      },
+      {
+        id: 'advanced_metallurgy',
+        name: 'Advanced Metallurgy',
+        description: 'Improves ship durability and reduces repair costs',
+        level: 0,
+        maxLevel: 5,
+        bonusType: 'durabilityAndRepair',
+        bonusValue: 0.1,
+        costs: { credits: 8000, titanium: 300, uranium: 100 },
+        requiredResearch: ['advanced_mining'],
+        completed: false
+      },
+      {
+        id: 'warp_technology',
+        name: 'Warp Technology',
+        description: 'Enables faster travel between star systems',
+        level: 0,
+        maxLevel: 3,
+        bonusType: 'travelSpeed',
+        bonusValue: 0.3,
+        costs: { credits: 15000, titanium: 500, uranium: 200, palladium: 50 },
+        requiredResearch: ['efficient_engines'],
+        completed: false
+      },
+      {
+        id: 'alien_linguistics',
+        name: 'Alien Linguistics',
+        description: 'Increases artifact discovery chance and improves artifact bonuses',
+        level: 0,
+        maxLevel: 3,
+        bonusType: 'artifactBonus',
+        bonusValue: 0.15,
+        costs: { credits: 20000, palladium: 100, exonium: 20 },
+        requiredResearch: ['warp_technology'],
+        completed: false
+      },
+      {
+        id: 'quantum_mining',
+        name: 'Quantum Mining',
+        description: 'Revolutionary mining technique that significantly increases rare resource yields',
+        level: 0,
+        maxLevel: 1,
+        bonusType: 'rareResourceYield',
+        bonusValue: 0.5,
+        costs: { credits: 50000, exonium: 50, darkMatter: 10 },
+        requiredResearch: ['alien_linguistics', 'advanced_metallurgy'],
+        completed: false
+      }
+    ];
+  }
+
+  private setupEventListeners(): void {
+    // UI events
+    this.uiManager.on('shipSent', (shipId: string, planetId: string) => {
+      this.sendShipToPlanet(shipId, planetId);
+    });
+    
+    this.uiManager.on('shipRecalled', (shipId: string) => {
+      this.recallShip(shipId);
+    });
+    
+    this.uiManager.on('upgradePurchased', (shipId: string, upgradeType: string) => {
+      this.upgradeShip(shipId, upgradeType);
+    });
+    
+    this.uiManager.on('researchStarted', (researchId:
