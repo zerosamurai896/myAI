@@ -121,6 +121,4 @@ else:
                         st.write(response)
                 
                 # Add assistant response to chat history
-                st.session_state.messages.append({"role": "assistant", "content": response})
-                setup_gemini_api()
-                st.secrets["GEMINI_API_KEY"]
+                st.session_state.messages.append({"role": "assistant", "content": response})        
